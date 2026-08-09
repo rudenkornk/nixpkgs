@@ -119,9 +119,17 @@ let
       # which does not contain the pkcs11 engine (it is built separately,
       # in libp11), so ENGINE_by_id("pkcs11") fails unless the search path
       # is redirected to the libp11 package
-      environment = lib.optionalAttrs cfg.pkcs11.enable {
-        OPENSSL_ENGINES = "${cfg.pkcs11.package}/lib/engines";
-      };
+      environment = lib.optionalAttrs cfg.pkcs11.enable (
+        {
+          OPENSSL_ENGINES = "${cfg.pkcs11.package}/lib/engines";
+        }
+        # security.tpm2.tctiEnvironment exports its variables only to login
+        # shells, not to systemd units, so mirror the TCTI selection here for
+        # the TPM2 PKCS#11 module
+        // lib.optionalAttrs config.security.tpm2.tctiEnvironment.enable {
+          inherit (config.environment.variables) TPM2_PKCS11_TCTI;
+        }
+      );
 
       path = [ pkgs.wpa_supplicant ];
       serviceConfig = {
@@ -162,14 +170,30 @@ let
           "/dev/rfkill"
         ]
         ++ lib.optional cfg.dbusControlled "/run/dbus"
-        ++ lib.optional cfg.allowAuxiliaryImperativeNetworks "/etc/wpa_supplicant";
+        ++ lib.optional cfg.allowAuxiliaryImperativeNetworks "/etc/wpa_supplicant"
+        # Token access for the PKCS#11 backends: the kernel TPM resource
+        # manager and the pcscd socket for smartcard readers. The paths are
+        # ignored when missing ("-" prefix), so both backends can be listed
+        # unconditionally.
+        ++ lib.optionals cfg.pkcs11.enable [
+          "-/dev/tpmrm0"
+          "-/run/pcscd"
+        ];
         BindReadOnlyPaths = [
           builtins.storeDir
           "/etc/"
         ]
         ++ cfg.extraConfigFiles
         ++ lib.optional (cfg.secretsFile != null) cfg.secretsFile;
-        DeviceAllow = "/dev/rfkill rw";
+        DeviceAllow = [
+          "/dev/rfkill rw"
+        ]
+        ++ lib.optional cfg.pkcs11.enable "/dev/tpmrm0 rw";
+        # The TPM resource manager device node is owned by the tss group
+        # (see the udev rules in the security.tpm2 module).
+        SupplementaryGroups = lib.optional (
+          cfg.pkcs11.enable && config.security.tpm2.enable && config.security.tpm2.tssGroup != null
+        ) config.security.tpm2.tssGroup;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         NoNewPrivileges = true;
@@ -635,9 +659,14 @@ in
             PKCS#11 tokens such as smartcards or a TPM.
 
             ::: {.note}
-            Hardware-backed tokens usually also require disabling
-            {option}`networking.wireless.enableHardening`, since the hardened
-            service cannot access device nodes such as the TPM.
+            With {option}`networking.wireless.enableHardening` enabled, the
+            service is additionally granted access to the kernel TPM resource
+            manager (`/dev/tpmrm0`, including membership in
+            {option}`security.tpm2.tssGroup`) and to the pcscd socket for
+            smartcard readers. The hardened service has no home directory,
+            so a tpm2-pkcs11 token store must reside where the service can
+            read it, e.g. tpm2-pkcs11's built-in fallback location
+            `/etc/tpm2_pkcs11`.
             :::
 
             ::: {.note}
