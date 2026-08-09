@@ -147,6 +147,11 @@ let
             "+${pkgs.coreutils}/bin/mkdir -p /run/wpa_supplicant/client"
             "+${pkgs.coreutils}/bin/chown wpa_supplicant:wpa_supplicant /run/wpa_supplicant/client"
             "+${pkgs.coreutils}/bin/chmod g=u /run/wpa_supplicant/client"
+          ]
+          ++ lib.optionals (cfg.enableHardening && cfg.pkcs11.enable) [
+            # tpm2-pkcs11 refuses to use a token store it cannot write.
+            "-+${pkgs.coreutils}/bin/chgrp --recursive wpa_supplicant /etc/tpm2_pkcs11"
+            "-+${pkgs.coreutils}/bin/chmod --recursive g+w /etc/tpm2_pkcs11"
           ];
       }
       // lib.optionalAttrs cfg.enableHardening {
@@ -170,14 +175,27 @@ let
           "/dev/rfkill"
         ]
         ++ lib.optional cfg.dbusControlled "/run/dbus"
-        ++ lib.optional cfg.allowAuxiliaryImperativeNetworks "/etc/wpa_supplicant";
+        ++ lib.optional cfg.allowAuxiliaryImperativeNetworks "/etc/wpa_supplicant"
+        # token access for the PKCS#11 backends
+        ++ lib.optionals cfg.pkcs11.enable [
+          "-/dev/tpmrm0"
+          "-/run/pcscd"
+          "-/etc/tpm2_pkcs11"
+        ];
         BindReadOnlyPaths = [
           builtins.storeDir
           "/etc/"
         ]
         ++ cfg.extraConfigFiles
         ++ lib.optional (cfg.secretsFile != null) cfg.secretsFile;
-        DeviceAllow = "/dev/rfkill rw";
+        DeviceAllow = [
+          "/dev/rfkill rw"
+        ]
+        ++ lib.optional cfg.pkcs11.enable "/dev/tpmrm0 rw";
+        # Grant tss group for tpm2 access if pkcs11 is enabled.
+        SupplementaryGroups = lib.optional (
+          cfg.pkcs11.enable && config.security.tpm2.enable && config.security.tpm2.tssGroup != null
+        ) config.security.tpm2.tssGroup;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         NoNewPrivileges = true;
@@ -643,9 +661,15 @@ in
             PKCS#11 tokens such as smartcards or a TPM.
 
             ::: {.note}
-            Hardware-backed tokens usually also require disabling
-            {option}`networking.wireless.enableHardening`, since the hardened
-            service cannot access device nodes such as the TPM.
+            With {option}`networking.wireless.enableHardening` enabled, the
+            service is additionally granted access to the kernel TPM resource
+            manager (`/dev/tpmrm0`, including membership in
+            {option}`security.tpm2.tssGroup`) and to the pcscd socket for
+            smartcard readers. The hardened service has no home directory,
+            so a tpm2-pkcs11 token store must reside at tpm2-pkcs11's
+            built-in fallback location `/etc/tpm2_pkcs11`. The store is made
+            group-writable to the service at each start: tpm2-pkcs11 refuses
+            to use a store it cannot lock and update.
             :::
 
             ::: {.note}
