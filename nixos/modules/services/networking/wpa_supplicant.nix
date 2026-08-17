@@ -94,7 +94,10 @@ let
       ) "sys-subsystem-net-devices-${utils.escapeSystemdPath iface}.device";
       configStr =
         (
-          if cfg.allowAuxiliaryImperativeNetworks then
+          # The pkcs11 engine is set up through global options in the
+          # NixOS-generated configuration, so it must be included even when
+          # all networks are imperative.
+          if cfg.allowAuxiliaryImperativeNetworks || (cfg.pkcs11.enable && !hasDeclarative) then
             "-c /etc/wpa_supplicant/imperative.conf -I /etc/wpa_supplicant/nixos.conf"
           else if hasDeclarative then
             "-c /etc/wpa_supplicant/nixos.conf"
@@ -115,21 +118,13 @@ let
       stopIfChanged = false;
       restartTriggers = [ config.environment.etc."wpa_supplicant/nixos.conf".source ];
 
-      # OpenSSL's dynamic engine loader only searches its own store path,
-      # which does not contain the pkcs11 engine (it is built separately,
-      # in libp11), so ENGINE_by_id("pkcs11") fails unless the search path
-      # is redirected to the libp11 package
-      environment = lib.optionalAttrs cfg.pkcs11.enable (
-        {
-          OPENSSL_ENGINES = "${cfg.pkcs11.package}/lib/engines";
-        }
-        # security.tpm2.tctiEnvironment exports its variables only to login
-        # shells, not to systemd units, so mirror the TCTI selection here for
-        # the TPM2 PKCS11 module
-        // lib.optionalAttrs config.security.tpm2.tctiEnvironment.enable {
+      # security.tpm2.tctiEnvironment exports its variables only to login
+      # shells, not to systemd units, so mirror the TCTI selection here for
+      # the TPM2 PKCS11 module
+      environment =
+        lib.optionalAttrs (cfg.pkcs11.enable && config.security.tpm2.tctiEnvironment.enable) {
           inherit (config.environment.variables) TPM2_PKCS11_TCTI;
-        }
-      );
+        };
 
       path = [ pkgs.wpa_supplicant ];
       serviceConfig = {
@@ -656,9 +651,12 @@ in
           type = types.bool;
           default = false;
           description = ''
-            Whether to make the OpenSSL pkcs11 engine available to
-            wpa_supplicant, for EAP-TLS authentication with client keys on
-            PKCS#11 tokens such as smartcards or a TPM.
+            Whether to set up the OpenSSL pkcs11 engine (from libp11) in
+            wpa_supplicant's global configuration, for EAP-TLS authentication
+            with client keys on PKCS#11 tokens such as smartcards or a TPM.
+            Networks then select an engine-backed key with `engine=1`,
+            `engine_id="pkcs11"` and `key_id="pkcs11:..."` in their `auth`
+            block.
 
             ::: {.note}
             With {option}`networking.wireless.enableHardening` enabled, the
@@ -670,28 +668,6 @@ in
             built-in fallback location `/etc/tpm2_pkcs11`. The store is made
             group-writable to the service at each start: tpm2-pkcs11 refuses
             to use a store it cannot lock and update.
-            :::
-
-            ::: {.note}
-            wpa_supplicant loads the engine through OpenSSL's dynamic engine
-            mechanism, which only searches OpenSSL's own store path;
-            This option points the search path (the `OPENSSL_ENGINES` environment
-            variable) at the configured libp11 package instead,
-            which shadows OpenSSL's built-in engine directory rather than extending it.
-
-            wpa_supplicant never requests the engines shipped there (afalg,
-            capi, loader_attic, padlock), so this is normally invisible.
-            A configuration that nevertheless loads one of them by name
-            inside this service (e.g. through a custom `OPENSSL_CONF`) can
-            restore the union of both directories:
-
-            ```nix
-            networking.wireless.pkcs11.package = pkgs.symlinkJoin {
-              name = "wpa-supplicant-engines";
-              paths = [ pkgs.libp11 ];
-              postBuild = "ln -s ''${pkgs.openssl.out}/lib/engines-3/*.so $out/lib/engines/";
-            };
-            ```
             :::
           '';
         };
@@ -811,6 +787,11 @@ in
       ++ [ "pmf=1" ]
       ++ optional (cfg.secretsFile != null) "ext_password_backend=file:${cfg.secretsFile}"
       ++ optional cfg.scanOnLowSignal ''bgscan="simple:30:-70:3600"''
+      # wpa_supplicant loads the pkcs11 engine through OpenSSL's dynamic
+      # engine mechanism, which searches only OpenSSL's own store path;
+      # the engine is built separately (in libp11), so it can only be found
+      # through its full path.
+      ++ optional cfg.pkcs11.enable "pkcs11_engine_path=${cfg.pkcs11.package}/lib/engines/pkcs11.so"
       ++ optional (cfg.extraConfig != "") cfg.extraConfig
     );
 
