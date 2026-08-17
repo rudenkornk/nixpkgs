@@ -673,6 +673,21 @@ in
         };
 
         package = mkPackageOption pkgs "libp11" { };
+
+        module = mkOption {
+          type = types.nullOr types.str;
+          default = "${lib.getLib pkgs.p11-kit}/lib/p11-kit-proxy.so";
+          defaultText = literalExpression ''"''${lib.getLib pkgs.p11-kit}/lib/p11-kit-proxy.so"'';
+          description = ''
+            PKCS#11 module for the engine to load (the `pkcs11_module_path`
+            global option), or `null` for the engine's built-in default.
+
+            The default is the p11-kit proxy, which dispatches to every
+            module registered with p11-kit system-wide (`/etc/pkcs11/modules`).
+            Point this at a specific module's shared object, e.g.
+            `''${pkgs.tpm2-pkcs11}/lib/libtpm2_pkcs11.so`, to bypass p11-kit.
+          '';
+        };
       };
 
       extraConfig = mkOption {
@@ -792,6 +807,9 @@ in
       # the engine is built separately (in libp11), so it can only be found
       # through its full path.
       ++ optional cfg.pkcs11.enable "pkcs11_engine_path=${cfg.pkcs11.package}/lib/engines/pkcs11.so"
+      ++ optional (
+        cfg.pkcs11.enable && cfg.pkcs11.module != null
+      ) "pkcs11_module_path=${cfg.pkcs11.module}"
       ++ optional (cfg.extraConfig != "") cfg.extraConfig
     );
 
