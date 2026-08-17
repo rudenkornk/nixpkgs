@@ -121,10 +121,9 @@ let
       # security.tpm2.tctiEnvironment exports its variables only to login
       # shells, not to systemd units, so mirror the TCTI selection here for
       # the TPM2 PKCS11 module
-      environment =
-        lib.optionalAttrs (cfg.pkcs11.enable && config.security.tpm2.tctiEnvironment.enable) {
-          inherit (config.environment.variables) TPM2_PKCS11_TCTI;
-        };
+      environment = lib.optionalAttrs (cfg.pkcs11.enable && config.security.tpm2.tctiEnvironment.enable) {
+        inherit (config.environment.variables) TPM2_PKCS11_TCTI;
+      };
 
       path = [ pkgs.wpa_supplicant ];
       serviceConfig = {
@@ -142,11 +141,6 @@ let
             "+${pkgs.coreutils}/bin/mkdir -p /run/wpa_supplicant/client"
             "+${pkgs.coreutils}/bin/chown wpa_supplicant:wpa_supplicant /run/wpa_supplicant/client"
             "+${pkgs.coreutils}/bin/chmod g=u /run/wpa_supplicant/client"
-          ]
-          ++ lib.optionals (cfg.enableHardening && cfg.pkcs11.enable) [
-            # tpm2-pkcs11 refuses to use a token store it cannot write.
-            "-+${pkgs.coreutils}/bin/chgrp --recursive wpa_supplicant /etc/tpm2_pkcs11"
-            "-+${pkgs.coreutils}/bin/chmod --recursive g+w /etc/tpm2_pkcs11"
           ];
       }
       // lib.optionalAttrs cfg.enableHardening {
@@ -662,12 +656,18 @@ in
             With {option}`networking.wireless.enableHardening` enabled, the
             service is additionally granted access to the kernel TPM resource
             manager (`/dev/tpmrm0`, including membership in
-            {option}`security.tpm2.tssGroup`) and to the pcscd socket for
-            smartcard readers. The hardened service has no home directory,
-            so a tpm2-pkcs11 token store must reside at tpm2-pkcs11's
-            built-in fallback location `/etc/tpm2_pkcs11`. The store is made
-            group-writable to the service at each start: tpm2-pkcs11 refuses
-            to use a store it cannot lock and update.
+            {option}`security.tpm2.tssGroup`), to the pcscd socket for
+            smartcard readers, and read-write access to tpm2-pkcs11's
+            system-wide token store `/etc/tpm2_pkcs11` (the hardened service
+            has no home directory, so only the system store location
+            applies).
+
+            The store must be writable by {option}`security.tpm2.tssGroup`:
+            tpm2-pkcs11 refuses to use a token store it cannot lock and
+            update. {option}`security.tpm2.pkcs11.enable` creates the store
+            directory with that group; keep files provisioned into it
+            group-writable, e.g. run `chmod -R g+rwX /etc/tpm2_pkcs11` once
+            after `tpm2_ptool` provisioning.
             :::
           '';
         };
