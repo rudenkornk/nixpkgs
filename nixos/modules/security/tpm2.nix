@@ -273,6 +273,16 @@ in
           (lib.getLib cfg.pkcs11.package)
         ];
 
+        # tpm2-pkcs11's system-wide token store. Created group-writable to
+        # the TSS group, so that tokens provisioned here are usable by TPM
+        # consumers running as a member of that group (e.g. the hardened
+        # wpa_supplicant service): tpm2-pkcs11 refuses to use a store it
+        # cannot lock and update. The contents are left alone, so anything
+        # provisioned as root needs a one-time `chmod -R g+rwX`.
+        systemd.tmpfiles.rules = lib.mkIf (cfg.pkcs11.enable && cfg.tssGroup != null) [
+          "d /etc/tpm2_pkcs11 2770 root ${cfg.tssGroup} -"
+        ];
+
         services.udev.extraRules = lib.mkIf cfg.applyUdevRules (udevRules cfg.tssUser cfg.tssGroup);
 
         # Create the tss user and group only if the default value is used
