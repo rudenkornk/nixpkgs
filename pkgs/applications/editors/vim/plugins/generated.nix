@@ -9720,14 +9720,14 @@ final: prev: {
 
   markdown-preview-nvim = buildVimPlugin {
     pname = "markdown-preview.nvim";
-    version = "0.0.10-unstable-2023-10-17";
+    version = "0.2.0";
     src = fetchFromGitHub {
-      owner = "iamcco";
+      owner = "sammaji";
       repo = "markdown-preview.nvim";
-      rev = "a923f5fc5ba36a3b17e289dc35dc17f66d0548ee";
-      hash = "sha256-TBXdG/Ih5DusAYZJyn37zVqHcMD85VkjrCoLyTo/KBg=";
+      tag = "v0.2.0";
+      hash = "sha256-h6IjpKUV5y4MJ05OUfUFAcuKcBA024mmKTnoezA5iv0=";
     };
-    meta.homepage = "https://github.com/iamcco/markdown-preview.nvim/";
+    meta.homepage = "https://github.com/sammaji/markdown-preview.nvim/";
     meta.license = getLicenseFromSpdxId "MIT";
     meta.hydraPlatforms = [ ];
   };

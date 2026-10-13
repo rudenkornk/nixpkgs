@@ -10,8 +10,11 @@
   fetchurl,
   replaceVars,
   # Language dependencies
-  fetchYarnDeps,
-  yarnConfigHook,
+  fetchPnpmDeps,
+  pnpmConfigHook,
+  pnpm_10,
+  rustPlatform,
+  stdenvNoCC,
   python3,
   # Misc dependencies
   notmuch,
@@ -2495,34 +2498,88 @@ assertNoAdditions {
 
   markdown-preview-nvim =
     let
-      # We only need its dependencies `node-modules`.
-      nodeDep = stdenv.mkDerivation {
-        inherit (super.markdown-preview-nvim) pname version src;
+      frontend = stdenvNoCC.mkDerivation (finalAttrs: {
+        pname = "markdown-preview-page";
+        inherit (super.markdown-preview-nvim) version src;
+        sourceRoot = "${finalAttrs.src.name}/app";
+
         nativeBuildInputs = [
-          yarnConfigHook
+          nodejs
+          pnpm_10
+          pnpmConfigHook
         ];
-        yarnOfflineCache = fetchYarnDeps {
-          yarnLock = "${super.markdown-preview-nvim.src}/yarn.lock";
-          hash = "sha256-kzc9jm6d9PJ07yiWfIOwqxOTAAydTpaLXVK6sEWM8gg=";
+        pnpmDeps = fetchPnpmDeps {
+          inherit (finalAttrs)
+            pname
+            version
+            src
+            sourceRoot
+            ;
+          pnpm = pnpm_10;
+          fetcherVersion = 4;
+          hash = "sha256-wPEWqxvZi/h8l0zK7YFbFsd941WjYjOqhvVGdjTeVrE=";
         };
+
+        env.NEXT_TELEMETRY_DISABLED = "1";
+
+        buildPhase = ''
+          runHook preBuild
+          pnpm build
+          runHook postBuild
+        '';
+
+        doCheck = true;
+        checkPhase = ''
+          runHook preCheck
+          pnpm typecheck
+          pnpm test
+          runHook postCheck
+        '';
+
         installPhase = ''
-          cp -r node_modules $out
+          runHook preInstall
+          cp -r out $out
+          runHook postInstall
+        '';
+      });
+
+      server = rustPlatform.buildRustPackage {
+        pname = "markdown-preview";
+        inherit (super.markdown-preview-nvim) version src;
+        cargoHash = "sha256-6MYS12V5uylU/LzTH0GMBauW008nlObR5pee9ZFZtBg=";
+        env.MKDP_SKIP_PAGE_BUILD = "1";
+        preBuild = ''
+          cp -r ${frontend} app/out
         '';
       };
     in
     super.markdown-preview-nvim.overrideAttrs {
-      runtimeDeps = [
-        nodejs
-      ];
+      runtimeDeps = lib.optionals stdenv.hostPlatform.isLinux [ xdg-utils ];
       postInstall = ''
-        cp -r ${nodeDep} $out/app/node_modules
+        mkdir -p $out/target/release
+        ln -s ${server}/bin/markdown-preview $out/target/release/markdown-preview
       '';
 
-      nativeBuildInputs = [ nodejs ];
+      nvimSkipModules = [ "build" ]; # Installer, exercised by installCheckPhase.
+      nativeInstallCheckInputs = [
+        neovim-unwrapped
+        curl
+      ];
       doInstallCheck = true;
       installCheckPhase = ''
-        node $out/app/index.js --version
+        runHook preInstallCheck
+        $out/target/release/markdown-preview --version | grep -Fx '${super.markdown-preview-nvim.version}'
+        export HOME="$TMPDIR"
+        nvim --headless -u NONE -i NONE -l ${./tests/markdown-preview-nvim.lua} "$out"
+        runHook postInstallCheck
       '';
+
+      passthru = super.markdown-preview-nvim.passthru // {
+        inherit frontend server;
+      };
+      meta = super.markdown-preview-nvim.meta // {
+        changelog = "https://github.com/sammaji/markdown-preview.nvim/releases/tag/${super.markdown-preview-nvim.src.tag}";
+      };
     };
 
   markid = super.markid.overrideAttrs {
